@@ -1,17 +1,12 @@
 import { useState } from 'react';
 
 export default function Home() {
-  const [tab, setTab] = useState('match');
-  const [mHome, setMHome] = useState('');
-  const [mAway, setMAway] = useState('');
-  const [mDate, setMDate] = useState('');
-  const [pName, setPName] = useState('');
-  const [pSeason, setPSeason] = useState('2025-26');
+  const today = new Date().toISOString().split('T')[0];
+  const [date, setDate] = useState(today);
   const [loading, setLoading] = useState(false);
-  const [stage, setStage] = useState(0);
-  const [result, setResult] = useState('');
-  const [resultLabel, setResultLabel] = useState('');
+  const [fixtures, setFixtures] = useState([]);
   const [error, setError] = useState('');
+  const [searched, setSearched] = useState('');
 
   async function callClaude(system, user) {
     const res = await fetch('/api/analyse', {
@@ -19,7 +14,7 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 1024,
+        max_tokens: 2048,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system,
         messages: [{ role: 'user', content: user }]
@@ -30,131 +25,180 @@ export default function Home() {
     return data.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
   }
 
-  async function runMatch() {
-    if (!mHome || !mAway) return setError('Please enter both team names.');
-    setError(''); setResult(''); setLoading(true); setStage(1);
+  async function runSearch() {
+    if (!date) return setError('Please select a date.');
+    setError(''); setFixtures([]); setLoading(true); setSearched(date);
     try {
-      const system = 'You are an expert football data analyst. Use web search to find real xG data for the requested match from FBref, SofaScore, WhoScored or FotMob. Find home xG, away xG, shots on target, actual score if played. Produce: match details, xG stats, result verdict or scoreline prediction with win/draw/loss %, key narrative. Under 220 words. Specific with numbers.';
-      const user = 'Find xG data for: ' + mHome + ' vs ' + mAway + (mDate ? ' on ' + mDate : ' (most recent or upcoming fixture)') + '. Produce a prediction or post-match xG analysis.';
-      setStage(2);
-      await new Promise(r => setTimeout(r, 800));
-      setStage(3);
-      const res = await callClaude(system, user);
-      setResultLabel(mHome + ' vs ' + mAway + (mDate ? ' — ' + mDate : ''));
-      setResult(res);
+      const system = `You are a football data analyst. Search for the top 10 most interesting football fixtures on the requested date across all major worldwide leagues (Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Champions League, Europa League, MLS, Liga MX, Brasileirao, Eredivisie, Primeira Liga, Scottish Prem, etc).
+
+For each fixture return a JSON array. Respond ONLY with a valid JSON array, no markdown, no explanation, no backticks. Format:
+[
+  {
+    "home": "Team Name",
+    "away": "Team Name", 
+    "league": "League Name",
+    "time": "18:45 UTC",
+    "home_xg": 1.6,
+    "away_xg": 1.1,
+    "predicted_score": "2-1",
+    "favourite": "home"
+  }
+]
+
+Base xG predictions on: current season form, head-to-head, home advantage, injuries/suspensions, league position. Pick the 10 most high-profile or interesting matches. If exact xG data is available from FBref or SofaScore use it, otherwise estimate from form. favourite field should be "home", "away", or "draw".`;
+
+      const user = `Find the top 10 football fixtures for ${date} worldwide. Return only the JSON array.`;
+      const result = await callClaude(system, user);
+      
+      let parsed;
+      try {
+        const clean = result.replace(/```json|```/g, '').trim();
+        parsed = JSON.parse(clean);
+      } catch(e) {
+        throw new Error('Could not parse fixture data. Try again.');
+      }
+      setFixtures(parsed);
     } catch(e) { setError('Error: ' + e.message); }
-    setLoading(false); setStage(0);
+    setLoading(false);
   }
 
-  async function runPlayer() {
-    if (!pName) return setError('Please enter a player name.');
-    setError(''); setResult(''); setLoading(true); setStage(1);
-    try {
-      const system = 'You are a football data analyst. Use web search to find a player real season xG and xA stats from FBref, Understat or WhoScored. Find xG, xA, goals, assists, appearances, team, league. Produce: stats summary, xG over/underperformance, projected final season total, prediction range. Under 220 words.';
-      const user = 'Find ' + pName + ' xG and xA stats for the ' + pSeason + ' season and produce a goal prediction and performance analysis.';
-      setStage(2);
-      await new Promise(r => setTimeout(r, 800));
-      setStage(3);
-      const res = await callClaude(system, user);
-      setResultLabel(pName + ' — ' + pSeason);
-      setResult(res);
-    } catch(e) { setError('Error: ' + e.message); }
-    setLoading(false); setStage(0);
+  function xgBar(val, max) {
+    const pct = Math.min((val / max) * 100, 100);
+    return (
+      <div style={{background:'#1e2540',borderRadius:'3px',height:'4px',width:'100%',marginTop:'4px'}}>
+        <div style={{background:'#00e5a0',borderRadius:'3px',height:'4px',width:pct+'%'}}></div>
+      </div>
+    );
   }
 
-  const stageLabel = ['', 'Searching for xG data...', 'Extracting stats...', 'Running AI model...'];
+  const maxXG = fixtures.length ? Math.max(...fixtures.map(f => Math.max(f.home_xg, f.away_xg))) : 3;
+
+  const favColour = (fav, side) => fav === side ? '#00e5a0' : '#8892b0';
 
   return (
     <>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: sans-serif; background: #0a0e1a; color: #e8eaf0; min-height: 100vh; }
-        .header { background: #0a0e1a; border-bottom: 1px solid #1e2540; padding: 20px 24px 0; }
-        .header-top { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-        .logo { width: 36px; height: 36px; background: #00e5a0; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #0a0e1a; }
+        .header { background: #0a0e1a; border-bottom: 1px solid #1e2540; padding: 20px 24px 16px; }
+        .header-top { display: flex; align-items: center; gap: 12px; }
+        .logo { width: 36px; height: 36px; background: #00e5a0; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #0a0e1a; flex-shrink:0; }
         .title { font-weight: 700; font-size: 22px; letter-spacing: 1px; color: #fff; text-transform: uppercase; }
         .subtitle { font-size: 12px; color: #5a6380; text-transform: uppercase; margin-top: 1px; }
-        .tabs { display: flex; }
-        .tab { font-weight: 600; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; padding: 10px 20px; border: none; background: none; color: #5a6380; cursor: pointer; border-bottom: 2px solid transparent; }
-        .tab.active { color: #00e5a0; border-bottom-color: #00e5a0; }
-        .content { padding: 24px; max-width: 800px; margin: 0 auto; }
-        .hint { font-size: 12px; color: #3a4260; margin-bottom: 18px; line-height: 1.6; margin-top: 20px; }
-        .row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: flex-end; }
-        .fg { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 130px; }
-        .fl { font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #5a6380; }
-        input, select { background: #111827; border: 1px solid #1e2540; border-radius: 6px; padding: 10px 14px; font-size: 15px; color: #e8eaf0; outline: none; width: 100%; }
-        input:focus, select:focus { border-color: #00e5a0; }
-        input::placeholder { color: #2e3550; }
-        button.go { background: #00e5a0; border: none; border-radius: 6px; padding: 11px 22px; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: #0a0e1a; cursor: pointer; height: 42px; white-space: nowrap; }
+        .content { padding: 24px; max-width: 900px; margin: 0 auto; }
+        .date-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 24px; margin-top: 20px; }
+        input[type=date] { background: #111827; border: 1px solid #1e2540; border-radius: 6px; padding: 10px 14px; font-size: 15px; color: #e8eaf0; outline: none; flex:1; max-width: 220px; }
+        input[type=date]:focus { border-color: #00e5a0; }
+        button.go { background: #00e5a0; border: none; border-radius: 6px; padding: 11px 28px; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: #0a0e1a; cursor: pointer; height: 42px; white-space: nowrap; }
         button.go:disabled { background: #1e2540; color: #3a4260; cursor: not-allowed; }
-        .pipeline { background: #0d1220; border: 1px solid #1e2540; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-        .pipeline-title { font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #2e3550; margin-bottom: 12px; }
-        .stage-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #111827; }
-        .stage-row:last-child { border-bottom: none; }
-        .stage-num { width: 28px; height: 28px; border-radius: 50%; background: #1e2540; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
-        .stage-num.active { background: #00e5a0; color: #0a0e1a; }
-        .stage-num.done { background: #004d2a; color: #00e5a0; }
-        .stage-text { font-size: 13px; font-weight: 600; text-transform: uppercase; color: #5a6380; }
-        .stage-row.active .stage-text { color: #e8eaf0; }
-        .result-box { background: #111827; border: 1px solid #1e2540; border-radius: 8px; overflow: hidden; margin-top: 4px; }
-        .result-head { background: #0d1220; padding: 10px 16px; border-bottom: 1px solid #1e2540; font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #5a6380; }
-        .result-body { padding: 16px; font-size: 14px; line-height: 1.8; color: #8892b0; white-space: pre-wrap; }
-        .err { color: #e05555; font-size: 13px; margin-top: 10px; padding: 10px 12px; background: #1a0d0d; border: 1px solid #3a1a1a; border-radius: 6px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
+        .card { background: #111827; border: 1px solid #1e2540; border-radius: 10px; padding: 16px; }
+        .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .league { font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #3a5080; }
+        .time { font-size: 11px; color: #3a4260; }
+        .teams { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+        .team { flex: 1; }
+        .team.away { text-align: right; }
+        .team-name { font-size: 14px; font-weight: 600; color: #c8d0e0; line-height: 1.3; }
+        .team-name.fav { color: #00e5a0; }
+        .score-box { background: #0d1220; border: 1px solid #1e2540; border-radius: 6px; padding: 6px 12px; text-align: center; flex-shrink: 0; }
+        .score { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: 1px; }
+        .score-label { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #2e3550; margin-top: 1px; }
+        .xg-section { border-top: 1px solid #1e2540; padding-top: 12px; }
+        .xg-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .xg-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #3a4260; }
+        .xg-vals { display: flex; gap: 16px; align-items: center; }
+        .xg-val { font-size: 13px; font-weight: 700; }
+        .xg-val.home { color: #00e5a0; }
+        .xg-val.away { color: #6090d0; }
+        .xg-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+        .xg-bar-wrap { display: flex; flex-direction: column; }
+        .xg-bar-label { font-size: 9px; color: #2e3550; margin-bottom: 3px; letter-spacing: 0.5px; }
+        .bar-bg { background: #1e2540; border-radius: 3px; height: 5px; }
+        .bar-fill { border-radius: 3px; height: 5px; }
+        .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
+        .skeleton { background: #111827; border: 1px solid #1e2540; border-radius: 10px; padding: 16px; height: 160px; position: relative; overflow: hidden; }
+        .skeleton::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0%, #1e2540 50%, transparent 100%); animation: shimmer 1.5s infinite; }
+        @keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+        .err { color: #e05555; font-size: 13px; padding: 10px 12px; background: #1a0d0d; border: 1px solid #3a1a1a; border-radius: 6px; margin-bottom: 16px; }
+        .date-heading { font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #2e3550; margin-bottom: 16px; }
       `}</style>
 
       <div className="header">
         <div className="header-top">
           <div className="logo">xG</div>
           <div>
-            <div className="title">Goals Predictor <span style={{color:'#00e5a0',fontSize:'13px'}}>LIVE</span></div>
-            <div className="subtitle">Web search · Real xG data · AI analysis</div>
+            <div className="title">Daily xG Fixtures <span style={{color:'#00e5a0',fontSize:'13px',letterSpacing:'2px'}}>LIVE</span></div>
+            <div className="subtitle">Top 10 fixtures · xG predictions · All major leagues</div>
           </div>
-        </div>
-        <div className="tabs">
-          <button className={'tab' + (tab==='match'?' active':'')} onClick={() => { setTab('match'); setResult(''); setError(''); }}>Match xG</button>
-          <button className={'tab' + (tab==='player'?' active':'')} onClick={() => { setTab('player'); setResult(''); setError(''); }}>Player Stats</button>
         </div>
       </div>
 
       <div className="content">
-        {tab === 'match' && <>
-          <p className="hint">Enter any fixture — Claude will search for real xG data and run the prediction model.</p>
-          <div className="row">
-            <div className="fg"><div className="fl">Home Team</div><input value={mHome} onChange={e=>setMHome(e.target.value)} placeholder="e.g. Saint-Etienne" onKeyDown={e=>e.key==='Enter'&&runMatch()} /></div>
-            <div className="fg"><div className="fl">Away Team</div><input value={mAway} onChange={e=>setMAway(e.target.value)} placeholder="e.g. Nice" onKeyDown={e=>e.key==='Enter'&&runMatch()} /></div>
-            <div className="fg" style={{flex:'0 0 auto',minWidth:0}}><div className="fl">Date (optional)</div><input value={mDate} onChange={e=>setMDate(e.target.value)} placeholder="e.g. 26 May 2026" style={{width:'160px'}} /></div>
-            <button className="go" onClick={runMatch} disabled={loading}>{loading?'Searching...':'Analyse'}</button>
-          </div>
-        </>}
-
-        {tab === 'player' && <>
-          <p className="hint">Search for any player — Claude will find their season xG, xA and predict their final tally.</p>
-          <div className="row">
-            <div className="fg"><div className="fl">Player Name</div><input value={pName} onChange={e=>setPName(e.target.value)} placeholder="e.g. Cole Palmer" onKeyDown={e=>e.key==='Enter'&&runPlayer()} /></div>
-            <div className="fg" style={{flex:'0 0 auto',minWidth:0}}><div className="fl">Season</div><select value={pSeason} onChange={e=>setPSeason(e.target.value)} style={{width:'140px'}}><option value="2025-26">2025/26</option><option value="2024-25">2024/25</option><option value="2023-24">2023/24</option></select></div>
-            <button className="go" onClick={runPlayer} disabled={loading}>{loading?'Searching...':'Analyse'}</button>
-          </div>
-        </>}
+        <div className="date-row">
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} />
+          <button className="go" onClick={runSearch} disabled={loading}>{loading ? 'Searching...' : 'Get Fixtures →'}</button>
+        </div>
 
         {error && <div className="err">{error}</div>}
 
         {loading && (
-          <div className="pipeline">
-            <div className="pipeline-title">Live data pipeline</div>
-            {[1,2,3].map(s => (
-              <div key={s} className={'stage-row' + (stage===s?' active':'')}>
-                <div className={'stage-num' + (stage>s?' done':stage===s?' active':'')}>{stage>s?'✓':s}</div>
-                <div className="stage-text">{stageLabel[s]}</div>
-              </div>
-            ))}
+          <div className="loading-grid">
+            {[...Array(6)].map((_, i) => <div key={i} className="skeleton" />)}
           </div>
         )}
 
-        {result && (
-          <div className="result-box">
-            <div className="result-head">{resultLabel}</div>
-            <div className="result-body">{result}</div>
-          </div>
+        {!loading && fixtures.length > 0 && (
+          <>
+            <div className="date-heading">Top fixtures — {new Date(searched + 'T12:00:00').toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'})}</div>
+            <div className="grid">
+              {fixtures.map((f, i) => {
+                const homeMax = maxXG;
+                const homePct = Math.min((f.home_xg / homeMax) * 100, 100);
+                const awayPct = Math.min((f.away_xg / homeMax) * 100, 100);
+                return (
+                  <div key={i} className="card">
+                    <div className="card-top">
+                      <span className="league">{f.league}</span>
+                      <span className="time">{f.time}</span>
+                    </div>
+                    <div className="teams">
+                      <div className="team">
+                        <div className={'team-name' + (f.favourite === 'home' ? ' fav' : '')}>{f.home}</div>
+                      </div>
+                      <div className="score-box">
+                        <div className="score">{f.predicted_score}</div>
+                        <div className="score-label">predicted</div>
+                      </div>
+                      <div className="team away">
+                        <div className={'team-name' + (f.favourite === 'away' ? ' fav' : '')}>{f.away}</div>
+                      </div>
+                    </div>
+                    <div className="xg-section">
+                      <div className="xg-row">
+                        <span className="xg-label">Expected Goals</span>
+                        <div className="xg-vals">
+                          <span className="xg-val home">{f.home_xg} xG</span>
+                          <span style={{color:'#2e3550',fontSize:'11px'}}>vs</span>
+                          <span className="xg-val away">{f.away_xg} xG</span>
+                        </div>
+                      </div>
+                      <div className="xg-bars">
+                        <div className="xg-bar-wrap">
+                          <div className="xg-bar-label">{f.home}</div>
+                          <div className="bar-bg"><div className="bar-fill" style={{width:homePct+'%',background:'#00e5a0'}}></div></div>
+                        </div>
+                        <div className="xg-bar-wrap">
+                          <div className="xg-bar-label" style={{textAlign:'right'}}>{f.away}</div>
+                          <div className="bar-bg"><div className="bar-fill" style={{width:awayPct+'%',background:'#6090d0'}}></div></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
     </>
