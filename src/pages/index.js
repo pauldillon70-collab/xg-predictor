@@ -52,8 +52,7 @@ Base xG predictions on: current season form, head-to-head, home advantage, injur
       
       let parsed;
       try {
-        const clean = result.replace(/```json|```/g, '').trim();
-        parsed = JSON.parse(clean);
+        const match = result.match(/\[[\s\S]*\]/); if (!match) throw new Error("Could not find fixture list"); parsed = JSON.parse(match[0]);
       } catch(e) {
         throw new Error('Could not parse fixture data. Try again.');
       }
