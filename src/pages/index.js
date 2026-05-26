@@ -14,7 +14,7 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 2048,
+        max_tokens: 1024,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system,
         messages: [{ role: 'user', content: user }]
@@ -47,7 +47,7 @@ For each fixture return a JSON array. Respond ONLY with a valid JSON array, no m
 
 Base xG predictions on: current season form, head-to-head, home advantage, injuries/suspensions, league position. Pick the 10 most high-profile or interesting matches. If exact xG data is available from FBref or SofaScore use it, otherwise estimate from form. favourite field should be "home", "away", or "draw".`;
 
-      const user = `Find the top 10 football fixtures for ${date} worldwide. Return only the JSON array.`;
+      const user = `Find the top 5 football fixtures for ${date} worldwide. Return only the JSON array.`;
       const result = await callClaude(system, user);
       
       let parsed;
