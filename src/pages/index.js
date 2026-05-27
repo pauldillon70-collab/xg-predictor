@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+const cache = {};
+
 export default function Home() {
   const today = new Date().toISOString().split('T')[0];
   const [date, setDate] = useState(today);
@@ -15,7 +17,7 @@ export default function Home() {
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
         max_tokens: 1024,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
         system,
         messages: [{ role: 'user', content: user }]
       })
@@ -27,52 +29,38 @@ export default function Home() {
 
   async function runSearch() {
     if (!date) return setError('Please select a date.');
-    setError(''); setFixtures([]); setLoading(true); setSearched(date);
+    setError('');
+    setSearched(date);
+
+    if (cache[date]) {
+      setFixtures(cache[date]);
+      return;
+    }
+
+    setFixtures([]);
+    setLoading(true);
+
     try {
-      const system = `You are a football data analyst. Search for the top 10 most interesting football fixtures on the requested date across all major worldwide leagues (Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Champions League, Europa League, MLS, Liga MX, Brasileirao, Eredivisie, Primeira Liga, Scottish Prem, etc).
-
-For each fixture return a JSON array. Respond ONLY with a valid JSON array, no markdown, no explanation, no backticks. Format:
-[
-  {
-    "home": "Team Name",
-    "away": "Team Name", 
-    "league": "League Name",
-    "time": "18:45 UTC",
-    "home_xg": 1.6,
-    "away_xg": 1.1,
-    "predicted_score": "2-1",
-    "favourite": "home"
-  }
-]
-
-Base xG predictions on: current season form, head-to-head, home advantage, injuries/suspensions, league position. Pick the 10 most high-profile or interesting matches. If exact xG data is available from FBref or SofaScore use it, otherwise estimate from form. favourite field should be "home", "away", or "draw".`;
-
+      const system = `You are a football analyst. Find the 5 biggest football matches on the given date worldwide. Return ONLY a JSON array, no markdown, no text, no backticks. Format: [{"home":"Team","away":"Team","league":"League","time":"HH:MM UTC","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw.`;
       const user = `Find the top 5 football fixtures for ${date} worldwide. Return only the JSON array.`;
       const result = await callClaude(system, user);
-      
+
       let parsed;
       try {
-        const match = result.match(/\[[\s\S]*\]/); if (!match) throw new Error("Could not find fixture list"); parsed = JSON.parse(match[0]);
+        const match = result.match(/\[[\s\S]*\]/);
+        if (!match) throw new Error('no array found');
+        parsed = JSON.parse(match[0]);
       } catch(e) {
         throw new Error('Could not parse fixture data. Try again.');
       }
+
+      cache[date] = parsed;
       setFixtures(parsed);
     } catch(e) { setError('Error: ' + e.message); }
     setLoading(false);
   }
 
-  function xgBar(val, max) {
-    const pct = Math.min((val / max) * 100, 100);
-    return (
-      <div style={{background:'#1e2540',borderRadius:'3px',height:'4px',width:'100%',marginTop:'4px'}}>
-        <div style={{background:'#00e5a0',borderRadius:'3px',height:'4px',width:pct+'%'}}></div>
-      </div>
-    );
-  }
-
   const maxXG = fixtures.length ? Math.max(...fixtures.map(f => Math.max(f.home_xg, f.away_xg))) : 3;
-
-  const favColour = (fav, side) => fav === side ? '#00e5a0' : '#8892b0';
 
   return (
     <>
@@ -90,7 +78,7 @@ Base xG predictions on: current season form, head-to-head, home advantage, injur
         input[type=date]:focus { border-color: #00e5a0; }
         button.go { background: #00e5a0; border: none; border-radius: 6px; padding: 11px 28px; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: #0a0e1a; cursor: pointer; height: 42px; white-space: nowrap; }
         button.go:disabled { background: #1e2540; color: #3a4260; cursor: not-allowed; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
         .card { background: #111827; border: 1px solid #1e2540; border-radius: 10px; padding: 16px; }
         .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .league { font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #3a5080; }
@@ -104,23 +92,24 @@ Base xG predictions on: current season form, head-to-head, home advantage, injur
         .score { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: 1px; }
         .score-label { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #2e3550; margin-top: 1px; }
         .xg-section { border-top: 1px solid #1e2540; padding-top: 12px; }
-        .xg-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .xg-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
         .xg-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #3a4260; }
         .xg-vals { display: flex; gap: 16px; align-items: center; }
         .xg-val { font-size: 13px; font-weight: 700; }
         .xg-val.home { color: #00e5a0; }
         .xg-val.away { color: #6090d0; }
-        .xg-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+        .xg-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .xg-bar-wrap { display: flex; flex-direction: column; }
-        .xg-bar-label { font-size: 9px; color: #2e3550; margin-bottom: 3px; letter-spacing: 0.5px; }
+        .xg-bar-label { font-size: 9px; color: #2e3550; margin-bottom: 3px; }
         .bar-bg { background: #1e2540; border-radius: 3px; height: 5px; }
         .bar-fill { border-radius: 3px; height: 5px; }
-        .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
+        .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
         .skeleton { background: #111827; border: 1px solid #1e2540; border-radius: 10px; padding: 16px; height: 160px; position: relative; overflow: hidden; }
         .skeleton::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0%, #1e2540 50%, transparent 100%); animation: shimmer 1.5s infinite; }
         @keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
         .err { color: #e05555; font-size: 13px; padding: 10px 12px; background: #1a0d0d; border: 1px solid #3a1a1a; border-radius: 6px; margin-bottom: 16px; }
         .date-heading { font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #2e3550; margin-bottom: 16px; }
+        .cached-badge { display: inline-block; background: #0d1f14; color: #00e5a0; border: 1px solid #004d2a; border-radius: 4px; font-size: 9px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; padding: 2px 6px; margin-left: 8px; vertical-align: middle; }
       `}</style>
 
       <div className="header">
@@ -128,7 +117,7 @@ Base xG predictions on: current season form, head-to-head, home advantage, injur
           <div className="logo">xG</div>
           <div>
             <div className="title">Daily xG Fixtures <span style={{color:'#00e5a0',fontSize:'13px',letterSpacing:'2px'}}>LIVE</span></div>
-            <div className="subtitle">Top 10 fixtures · xG predictions · All major leagues</div>
+            <div className="subtitle">Top 5 fixtures · xG predictions · All major leagues</div>
           </div>
         </div>
       </div>
@@ -143,18 +132,20 @@ Base xG predictions on: current season form, head-to-head, home advantage, injur
 
         {loading && (
           <div className="loading-grid">
-            {[...Array(6)].map((_, i) => <div key={i} className="skeleton" />)}
+            {[...Array(5)].map((_, i) => <div key={i} className="skeleton" />)}
           </div>
         )}
 
         {!loading && fixtures.length > 0 && (
           <>
-            <div className="date-heading">Top fixtures — {new Date(searched + 'T12:00:00').toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'})}</div>
+            <div className="date-heading">
+              Top fixtures — {new Date(searched + 'T12:00:00').toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'})}
+              {cache[searched] && fixtures === cache[searched] && <span className="cached-badge">cached</span>}
+            </div>
             <div className="grid">
               {fixtures.map((f, i) => {
-                const homeMax = maxXG;
-                const homePct = Math.min((f.home_xg / homeMax) * 100, 100);
-                const awayPct = Math.min((f.away_xg / homeMax) * 100, 100);
+                const homePct = Math.min((f.home_xg / maxXG) * 100, 100);
+                const awayPct = Math.min((f.away_xg / maxXG) * 100, 100);
                 return (
                   <div key={i} className="card">
                     <div className="card-top">
