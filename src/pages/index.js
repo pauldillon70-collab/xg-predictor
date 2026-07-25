@@ -87,7 +87,7 @@ export default function Home() {
         }
 
         // Step 2: format all fixtures
-        const formatted = allFixtures.map(f => ({
+        const formatted = allFixtures.filter(f => !["FT","AET","PEN","AWD","WO"].includes(f.fixture.status.short)).map(f => ({
           home: f.teams.home.name,
           away: f.teams.away.name,
           league: f.league.name,
