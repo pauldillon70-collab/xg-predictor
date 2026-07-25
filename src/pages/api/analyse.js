@@ -11,7 +11,7 @@ export default async function handler(req, res) {
   if (type === 'fixtures') {
     try {
       const promises = leagueIds.map(id =>
-        fetch(`https://v3.football.api-sports.io/fixtures?date=${date}&league=${id}&season=${date.slice(0,4)}`, {
+        fetch(`https://v3.football.api-sports.io/fixtures?date=${date}&league=${id}`, {
           headers: { 'x-apisports-key': process.env.API_FOOTBALL_KEY }
         }).then(r => r.json())
       );
