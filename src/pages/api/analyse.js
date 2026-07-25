@@ -125,9 +125,27 @@ function extractJsonArray(data) {
     .map(b => b.text)
     .join('')
     .trim();
+
+  // Happy path: complete array present
   const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error('No JSON array in model response');
-  return JSON.parse(match[0]);
+  if (match) {
+    try { return JSON.parse(match[0]); } catch {}
+  }
+
+  // Salvage path: response was truncated mid-array. Take everything
+  // from the first bracket, cut back to the last complete object,
+  // and close the array ourselves.
+  const start = text.indexOf('[');
+  if (start === -1) throw new Error('No JSON array in model response');
+  const partial = text.slice(start);
+  const lastBrace = partial.lastIndexOf('}');
+  if (lastBrace === -1) throw new Error('No complete predictions in model response');
+  const repaired = partial.slice(0, lastBrace + 1) + ']';
+  try {
+    return JSON.parse(repaired);
+  } catch {
+    throw new Error('Could not parse predictions from model response');
+  }
 }
 
 async function runDaily(date) {
@@ -160,7 +178,7 @@ async function runDaily(date) {
   const list = batch.map(f => `${f.home} vs ${f.away} (${f.league})`).join('\n');
   const data = await anthropic({
     model: 'claude-sonnet-4-5',
-    max_tokens: 3000,
+    max_tokens: 8192,
     system: 'You are a football analyst. Given a list of fixtures, predict xG for each. Return ONLY a JSON array, no markdown, no text. One object per fixture. Each object MUST repeat the exact home and away team names from the input. Format: [{"home":"Team A","away":"Team B","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw. Base on team quality, league level, home advantage, current form.',
     messages: [{ role: 'user', content: `Predict xG for all these fixtures:\n${list}\n\nReturn only the JSON array with exactly ${batch.length} entries.` }]
   });
