@@ -2,80 +2,18 @@ import { useState } from 'react';
 
 const cache = {};
 
-// API-Football league IDs for free tier leagues
-const LEAGUE_MAP = [
-  { name: 'Premier League',      id: 39,  season: 2025 },
-  { name: 'Championship',        id: 40,  season: 2025 },
-  { name: 'League One',          id: 41,  season: 2025 },
-  { name: 'League Two',          id: 42,  season: 2025 },
-  { name: 'National League',     id: 43,  season: 2025 },
-  { name: 'La Liga',             id: 140, season: 2025 },
-  { name: 'Serie A',             id: 135, season: 2025 },
-  { name: 'Ligue 1',             id: 61,  season: 2025 },
-  { name: 'Ligue 2',             id: 62,  season: 2025 },
-  { name: 'Bundesliga',          id: 78,  season: 2025 },
-  { name: 'Bundesliga 2',        id: 79,  season: 2025 },
-  { name: 'Eredivisie',          id: 88,  season: 2025 },
-  { name: 'Eerste Divisie',      id: 89,  season: 2025 },
-  { name: 'Scottish Premiership',id: 179, season: 2025 },
-  { name: 'Scottish Championship',id: 180,season: 2025 },
-  { name: 'Scottish League One', id: 181, season: 2025 },
-  { name: 'Irish Premier League',id: 357, season: 2025 },
-  { name: 'MLS',                 id: 253, season: 2025 },
-  { name: 'Liga MX',             id: 262, season: 2025 },
-  { name: 'Belgian Pro League',  id: 144, season: 2025 },
-  { name: 'Turkish Süper Lig',   id: 203, season: 2025 },
-  { name: 'Primeira Liga',       id: 94,  season: 2025 },
-  { name: 'Swiss Super League',  id: 207, season: 2025 },
-  { name: 'Austrian Bundesliga', id: 218, season: 2025 },
-  { name: 'Greek Super League',  id: 197, season: 2025 },
-  { name: 'Danish Superliga',    id: 119, season: 2025 },
-  { name: 'Eliteserien',         id: 103, season: 2025 },
-  { name: 'Allsvenskan',         id: 113, season: 2025 },
-  { name: 'Finnish Veikkausliiga',id: 244,season: 2025 },
-  { name: 'Czech First League',  id: 345, season: 2025 },
-  { name: 'Polish Ekstraklasa',  id: 106, season: 2025 },
-  { name: 'Romanian Liga 1',     id: 283, season: 2025 },
-  { name: 'Croatian HNL',        id: 210, season: 2025 },
-  { name: 'Slovenian PrvaLiga',  id: 441, season: 2025 },
-  { name: 'Israeli Premier League',id: 384,season: 2025 },
-  { name: 'Saudi Pro League',    id: 307, season: 2025 },
-  { name: 'J1 League',           id: 98,  season: 2025 },
-  { name: 'Chinese Super League',id: 169, season: 2025 },
-  { name: 'Malaysian Super League',id: 142,season: 2025 },
-  { name: 'PL2',                 id: 48,  season: 2025 },
-];
-
-const DEFAULT_ON = new Set([
-  'Premier League','Championship','La Liga','Serie A','Ligue 1','Bundesliga','Eredivisie','Scottish Premiership','MLS'
-]);
-
 export default function Home() {
   const today = new Date().toISOString().split('T')[0];
   const [date, setDate] = useState(today);
   const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState('');
   const [fixtures, setFixtures] = useState([]);
   const [error, setError] = useState('');
   const [searched, setSearched] = useState('');
-  const [activeLeagues, setActiveLeagues] = useState(new Set(DEFAULT_ON));
-  const [showAll, setShowAll] = useState(false);
   const [dataSource, setDataSource] = useState('');
 
-  function toggleLeague(l) {
-    setActiveLeagues(prev => {
-      const next = new Set(prev);
-      if (next.has(l)) { if (next.size > 1) next.delete(l); } else next.add(l);
-      return next;
-    });
-  }
-
-  function selectAll() { setActiveLeagues(new Set(LEAGUE_MAP.map(l => l.name))); }
-  function clearAll() { setActiveLeagues(new Set(['Premier League'])); }
-
-  const visibleLeagues = showAll ? LEAGUE_MAP : LEAGUE_MAP.slice(0, 12);
-
-  async function callPredict(fixtures) {
-    const fixtureList = fixtures.map(f => `${f.home} vs ${f.away} (${f.league}, ${f.time})`).join('\n');
+  async function callPredict(fixtureList) {
+    const list = fixtureList.map(f => `${f.home} vs ${f.away} (${f.league})`).join('\n');
     const res = await fetch('/api/analyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -83,20 +21,20 @@ export default function Home() {
         type: 'predict',
         payload: {
           model: 'claude-sonnet-4-5',
-          max_tokens: 1024,
-          system: 'You are a football analyst. Given a list of fixtures, return xG predictions as a JSON array. Return ONLY a JSON array, no markdown, no text. Format: [{"home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. One entry per fixture in the same order. favourite is home/away/draw. Base predictions on team form, league position, home advantage, H2H.',
-          messages: [{ role: 'user', content: `Predict xG for these fixtures:\n${fixtureList}\n\nReturn only the JSON array with one entry per fixture in order.` }]
+          max_tokens: 2048,
+          system: 'You are a football analyst. Given a list of fixtures, predict xG for each. Return ONLY a JSON array, no markdown, no text. One object per fixture in the same order. Format: [{"home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw. Base on team quality, league, home advantage, current form.',
+          messages: [{ role: 'user', content: `Predict xG for all these fixtures:\n${list}\n\nReturn only the JSON array with exactly ${fixtureList.length} entries in order.` }]
         }
       })
     });
     const data = await res.json();
     const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
     const match = text.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error('Could not parse xG predictions');
+    if (!match) throw new Error('Could not parse predictions');
     return JSON.parse(match[0]);
   }
 
-  async function callSearch(date, leagues) {
+  async function callSearch(date) {
     const res = await fetch('/api/analyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -104,100 +42,106 @@ export default function Home() {
         type: 'search',
         payload: {
           model: 'claude-sonnet-4-5',
-          max_tokens: 1024,
-          system: `You are a football analyst. Find up to 5 matches on the given date from ONLY these leagues: ${leagues}. Return ONLY a JSON array, no markdown, no text. Format: [{"home":"Team","away":"Team","league":"League","time":"HH:MM UTC","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw.`,
-          messages: [{ role: 'user', content: `Find football fixtures for ${date} in these leagues: ${leagues}. Return only the JSON array.` }]
+          max_tokens: 2048,
+          system: 'You are a football analyst. Find the top 20 most high-profile football fixtures on the given date worldwide across all leagues. Return ONLY a JSON array, no markdown. Format: [{"home":"Team","away":"Team","league":"League","time":"HH:MM UTC","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. Sort by combined xG descending. favourite is home/away/draw.',
+          messages: [{ role: 'user', content: `Find top 20 football fixtures for ${date} worldwide sorted by predicted xG. Return only the JSON array.` }]
         }
       })
     });
     const data = await res.json();
     const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
     const match = text.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error('Could not parse fixture data');
+    if (!match) return [];
     return JSON.parse(match[0]);
   }
 
   async function runSearch() {
     if (!date) return setError('Please select a date.');
-    const leagueList = [...activeLeagues].join(', ');
-    const cacheKey = date + '|' + leagueList;
-    setError('');
-    setSearched(date);
+    const cacheKey = date;
+    setError(''); setSearched(date);
 
     if (cache[cacheKey]) {
       setFixtures(cache[cacheKey]);
-      setDataSource(cache[cacheKey + '_source'] || '');
+      setDataSource(cache[cacheKey + '_src'] || '');
       return;
     }
 
-    setFixtures([]);
-    setLoading(true);
+    setFixtures([]); setLoading(true);
 
     try {
       if (date === today) {
-        // Use API-Football for real fixtures
-        const activeLeagueObjs = LEAGUE_MAP.filter(l => activeLeagues.has(l.name));
-        const leagueIds = activeLeagueObjs.map(l => l.id);
-
+        // Step 1: get all fixtures from API-Football
+        setStage('Fetching today\'s fixtures...');
         const res = await fetch('/api/analyse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'fixtures', date, leagueIds })
+          body: JSON.stringify({ type: 'fixtures', date })
         });
         const data = await res.json();
-        const rawFixtures = data.fixtures || [];
+        const allFixtures = data.fixtures || [];
 
-        if (rawFixtures.length === 0) {
-          // Fall back to Claude if no fixtures found
-          const results = await callSearch(date, leagueList);
-          cache[cacheKey] = results;
-          cache[cacheKey + '_source'] = 'claude';
-          setDataSource('claude');
-          setFixtures(results);
-        } else {
-          // Format real fixtures
-          const formatted = rawFixtures.slice(0, 10).map(f => ({
-            home: f.teams.home.name,
-            away: f.teams.away.name,
-            league: f.league.name,
-            time: new Date(f.fixture.date).toISOString().slice(11, 16) + ' UTC',
-            status: f.fixture.status.short,
-            home_score: f.goals.home,
-            away_score: f.goals.away,
-          }));
-
-          // Get xG predictions from Claude (no web search)
-          const predictions = await callPredict(formatted);
-
-          const combined = formatted.map((f, i) => ({
-            ...f,
-            home_xg: predictions[i]?.home_xg || 1.2,
-            away_xg: predictions[i]?.away_xg || 1.0,
-            predicted_score: predictions[i]?.predicted_score || '1-1',
-            favourite: predictions[i]?.favourite || 'draw',
-          }));
-
-          cache[cacheKey] = combined;
-          cache[cacheKey + '_source'] = 'api-football';
-          setDataSource('api-football');
-          setFixtures(combined);
+        if (!allFixtures.length) {
+          setError('No fixtures found for today.');
+          setLoading(false);
+          return;
         }
+
+        // Step 2: format all fixtures
+        const formatted = allFixtures.map(f => ({
+          home: f.teams.home.name,
+          away: f.teams.away.name,
+          league: f.league.name,
+          country: f.league.country,
+          time: new Date(f.fixture.date).toISOString().slice(11, 16) + ' UTC',
+          status: f.fixture.status.short,
+          home_score: f.goals.home,
+          away_score: f.goals.away,
+        }));
+
+        // Step 3: get xG predictions for all fixtures in batches of 20
+        setStage('Generating xG predictions...');
+        const batch = formatted.slice(0, 40); // limit to 40 for token budget
+        const predictions = await callPredict(batch);
+
+        // Step 4: combine and sort by total xG descending, take top 20
+        const combined = batch.map((f, i) => ({
+          ...f,
+          home_xg: predictions[i]?.home_xg ?? 1.2,
+          away_xg: predictions[i]?.away_xg ?? 1.0,
+          predicted_score: predictions[i]?.predicted_score ?? '1-1',
+          favourite: predictions[i]?.favourite ?? 'draw',
+          total_xg: (predictions[i]?.home_xg ?? 1.2) + (predictions[i]?.away_xg ?? 1.0),
+        }));
+
+        combined.sort((a, b) => b.total_xg - a.total_xg);
+        const top20 = combined.slice(0, 20);
+
+        cache[cacheKey] = top20;
+        cache[cacheKey + '_src'] = 'live';
+        setDataSource('live');
+        setFixtures(top20);
       } else {
-        // Non-today: Claude knowledge only
-        const results = await callSearch(date, leagueList);
+        setStage('Searching for fixtures...');
+        const results = await callSearch(date);
+        if (!results.length) {
+          setError('No fixtures found for this date.');
+          setLoading(false);
+          return;
+        }
+        results.sort((a, b) => (b.home_xg + b.away_xg) - (a.home_xg + a.away_xg));
         cache[cacheKey] = results;
-        cache[cacheKey + '_source'] = 'claude';
+        cache[cacheKey + '_src'] = 'claude';
         setDataSource('claude');
         setFixtures(results);
       }
     } catch(e) { setError('Error: ' + e.message); }
     setLoading(false);
+    setStage('');
   }
 
   const maxXG = fixtures.length ? Math.max(...fixtures.map(f => Math.max(f.home_xg || 0, f.away_xg || 0))) : 3;
-
-  const isLive = f => f.status === 'LIVE' || f.status === '1H' || f.status === '2H' || f.status === 'HT';
-  const isFinished = f => f.status === 'FT' || f.status === 'AET' || f.status === 'PEN';
+  const isLive = f => ['1H','2H','HT','ET','P','LIVE'].includes(f.status);
+  const isFinished = f => ['FT','AET','PEN'].includes(f.status);
 
   return (
     <>
@@ -205,66 +149,59 @@ export default function Home() {
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: sans-serif; background: #0a0e1a; color: #e8eaf0; min-height: 100vh; }
         .header { background: #0a0e1a; border-bottom: 1px solid #1e2540; padding: 20px 24px 16px; }
-        .header-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+        .header-top { display: flex; align-items: center; gap: 12px; }
         .logo { width: 36px; height: 36px; background: #00e5a0; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #0a0e1a; flex-shrink:0; }
         .title { font-weight: 700; font-size: 22px; letter-spacing: 1px; color: #fff; text-transform: uppercase; }
         .subtitle { font-size: 12px; color: #5a6380; text-transform: uppercase; margin-top: 1px; }
-        .league-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-        .ctrl-btn { font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; background: none; border: 1px solid #1e2540; border-radius: 4px; color: #3a4260; padding: 3px 8px; cursor: pointer; }
-        .ctrl-btn:hover { color: #5a6380; }
-        .league-bar { display: flex; flex-wrap: wrap; gap: 6px; }
-        .league-pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px; border: 1px solid #1e2540; background: #111827; color: #5a6380; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
-        .league-pill.on { background: #0d1f14; border-color: #00e5a0; color: #00e5a0; }
-        .show-more { font-size: 11px; font-weight: 600; color: #3a5080; background: none; border: 1px dashed #1e2540; border-radius: 20px; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
-        .content { padding: 24px; max-width: 900px; margin: 0 auto; }
-        .date-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 24px; margin-top: 4px; flex-wrap: wrap; }
+        .content { padding: 24px; max-width: 960px; margin: 0 auto; }
+        .date-row { display: flex; gap: 10px; align-items: center; margin-bottom: 24px; margin-top: 20px; flex-wrap: wrap; }
         input[type=date] { background: #111827; border: 1px solid #1e2540; border-radius: 6px; padding: 10px 14px; font-size: 15px; color: #e8eaf0; outline: none; }
         input[type=date]:focus { border-color: #00e5a0; }
-        button.go { background: #00e5a0; border: none; border-radius: 6px; padding: 11px 28px; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: #0a0e1a; cursor: pointer; height: 42px; white-space: nowrap; }
-        button.go:disabled { background: #1e2540; color: #3a4260; cursor: not-allowed; }
-        button.today-btn { background: none; border: 1px solid #1e2540; border-radius: 6px; padding: 11px 16px; font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #3a4260; cursor: pointer; height: 42px; white-space: nowrap; }
-        button.today-btn:hover { color: #5a6380; border-color: #2e3550; }
-        .source-badge { font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; }
-        .source-badge.api { background: #0d1f14; color: #00e5a0; border: 1px solid #004d2a; }
-        .source-badge.claude { background: #0d1420; color: #6090d0; border: 1px solid #1e2540; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+        .go { background: #00e5a0; border: none; border-radius: 6px; padding: 11px 28px; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: #0a0e1a; cursor: pointer; height: 42px; white-space: nowrap; }
+        .go:disabled { background: #1e2540; color: #3a4260; cursor: not-allowed; }
+        .today-btn { background: none; border: 1px solid #1e2540; border-radius: 6px; padding: 11px 16px; font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #3a4260; cursor: pointer; height: 42px; }
+        .today-btn:hover { color: #5a6380; }
+        .stage-msg { font-size: 12px; color: #3a5080; letter-spacing: 0.5px; }
+        .badge { font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; }
+        .badge.live { background: #0d1f14; color: #00e5a0; border: 1px solid #004d2a; }
+        .badge.ai { background: #0d1420; color: #6090d0; border: 1px solid #1e2540; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
         .card { background: #111827; border: 1px solid #1e2540; border-radius: 10px; padding: 16px; }
-        .card.live { border-color: #00e5a0; }
-        .card.finished { opacity: 0.85; }
+        .card.is-live { border-color: #00e5a0; }
         .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .league-tag { font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #3a5080; }
-        .time { font-size: 11px; color: #3a4260; }
+        .league-tag { font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #3a5080; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .kick { font-size: 11px; color: #3a4260; flex-shrink: 0; }
         .live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #00e5a0; margin-right: 4px; animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
         .teams { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
-        .team { flex: 1; }
+        .team { flex: 1; min-width: 0; }
         .team.away { text-align: right; }
-        .team-name { font-size: 14px; font-weight: 600; color: #c8d0e0; line-height: 1.3; }
+        .team-name { font-size: 14px; font-weight: 600; color: #c8d0e0; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .team-name.fav { color: #00e5a0; }
-        .score-box { background: #0d1220; border: 1px solid #1e2540; border-radius: 6px; padding: 6px 12px; text-align: center; flex-shrink: 0; }
-        .score-box.live { border-color: #00e5a0; }
+        .score-box { background: #0d1220; border: 1px solid #1e2540; border-radius: 6px; padding: 6px 12px; text-align: center; flex-shrink: 0; min-width: 60px; }
+        .score-box.is-live { border-color: #00e5a0; }
         .score { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: 1px; }
-        .score-label { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #2e3550; margin-top: 1px; }
-        .score-label.live { color: #00e5a0; }
+        .score-lbl { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #2e3550; margin-top: 1px; }
+        .score-lbl.is-live { color: #00e5a0; }
         .xg-section { border-top: 1px solid #1e2540; padding-top: 12px; }
         .xg-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .xg-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #3a4260; }
-        .xg-vals { display: flex; gap: 16px; align-items: center; }
+        .xg-lbl { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #3a4260; }
+        .xg-vals { display: flex; gap: 12px; align-items: center; }
         .xg-val { font-size: 13px; font-weight: 700; }
-        .xg-val.home { color: #00e5a0; }
-        .xg-val.away { color: #6090d0; }
-        .xg-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .xg-bar-wrap { display: flex; flex-direction: column; }
-        .xg-bar-label { font-size: 9px; color: #2e3550; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .xg-val.h { color: #00e5a0; }
+        .xg-val.a { color: #6090d0; }
+        .bars { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .bar-wrap { display: flex; flex-direction: column; }
+        .bar-lbl { font-size: 9px; color: #2e3550; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .bar-bg { background: #1e2540; border-radius: 3px; height: 5px; }
         .bar-fill { border-radius: 3px; height: 5px; }
-        .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+        .skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
         .skeleton { background: #111827; border: 1px solid #1e2540; border-radius: 10px; height: 160px; position: relative; overflow: hidden; }
-        .skeleton::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0%, #1e2540 50%, transparent 100%); animation: shimmer 1.5s infinite; }
-        @keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
-        .err { color: #e05555; font-size: 13px; padding: 10px 12px; background: #1a0d0d; border: 1px solid #3a1a1a; border-radius: 6px; margin-bottom: 16px; }
-        .date-heading { font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #2e3550; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
-        .no-fixtures { text-align: center; padding: 40px 20px; color: #3a4260; font-size: 14px; }
+        .skeleton::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg,transparent 0%,#1e2540 50%,transparent 100%); animation:shimmer 1.5s infinite; }
+        @keyframes shimmer { 0%{transform:translateX(-100%)}100%{transform:translateX(100%)} }
+        .err { color:#e05555; font-size:13px; padding:10px 12px; background:#1a0d0d; border:1px solid #3a1a1a; border-radius:6px; margin-bottom:16px; }
+        .date-heading { font-size:11px; font-weight:600; letter-spacing:2px; text-transform:uppercase; color:#2e3550; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
+        .xg-rank { font-size: 10px; color: #2e3550; font-weight: 600; }
       `}</style>
 
       <div className="header">
@@ -272,100 +209,70 @@ export default function Home() {
           <div className="logo">xG</div>
           <div>
             <div className="title">Daily xG Fixtures <span style={{color:'#00e5a0',fontSize:'13px',letterSpacing:'2px'}}>LIVE</span></div>
-            <div className="subtitle">xG predictions · {activeLeagues.size} league{activeLeagues.size !== 1 ? 's' : ''} selected</div>
+            <div className="subtitle">Top 20 fixtures by predicted xG · All leagues</div>
           </div>
-        </div>
-        <div className="league-controls">
-          <button className="ctrl-btn" onClick={selectAll}>All</button>
-          <button className="ctrl-btn" onClick={clearAll}>None</button>
-        </div>
-        <div className="league-bar">
-          {visibleLeagues.map(l => (
-            <div key={l.name} className={'league-pill' + (activeLeagues.has(l.name) ? ' on' : '')} onClick={() => toggleLeague(l.name)}>{l.name}</div>
-          ))}
-          <button className="show-more" onClick={() => setShowAll(v => !v)}>
-            {showAll ? '− Less' : `+ ${LEAGUE_MAP.length - 12} more`}
-          </button>
         </div>
       </div>
 
       <div className="content">
         <div className="date-row">
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} />
-          <button className="today-btn" onClick={() => setDate(today)}>Today</button>
-          <button className="go" onClick={runSearch} disabled={loading}>{loading ? 'Loading...' : 'Get Fixtures →'}</button>
+          <input type="date" value={date} onChange={e=>setDate(e.target.value)} />
+          <button className="today-btn" onClick={()=>setDate(today)}>Today</button>
+          <button className="go" onClick={runSearch} disabled={loading}>{loading?'Loading...':'Get Fixtures →'}</button>
+          {loading && stage && <span className="stage-msg">{stage}</span>}
         </div>
 
         {error && <div className="err">{error}</div>}
 
-        {loading && (
-          <div className="loading-grid">
-            {[...Array(4)].map((_, i) => <div key={i} className="skeleton" />)}
-          </div>
-        )}
+        {loading && <div className="skeletons">{[...Array(8)].map((_,i)=><div key={i} className="skeleton"/>)}</div>}
 
-        {!loading && fixtures.length > 0 && (
+        {!loading && fixtures.length>0 && (
           <>
             <div className="date-heading">
-              {new Date(searched + 'T12:00:00').toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'})}
-              {dataSource === 'api-football' && <span className="source-badge api">Live data</span>}
-              {dataSource === 'claude' && <span className="source-badge claude">AI predictions</span>}
+              {new Date(searched+'T12:00:00').toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+              {dataSource==='live' && <span className="badge live">Live data</span>}
+              {dataSource==='claude' && <span className="badge ai">AI predictions</span>}
+              <span style={{marginLeft:'auto',fontSize:'10px',color:'#2e3550'}}>{fixtures.length} fixtures · sorted by xG</span>
             </div>
             <div className="grid">
-              {fixtures.map((f, i) => {
-                const homePct = Math.min(((f.home_xg || 0) / maxXG) * 100, 100);
-                const awayPct = Math.min(((f.away_xg || 0) / maxXG) * 100, 100);
-                const live = isLive(f);
-                const finished = isFinished(f);
-                const hasScore = f.home_score !== null && f.home_score !== undefined;
+              {fixtures.map((f,i)=>{
+                const hp=Math.min(((f.home_xg||0)/maxXG)*100,100);
+                const ap=Math.min(((f.away_xg||0)/maxXG)*100,100);
+                const live=isLive(f);
+                const fin=isFinished(f);
+                const hasScore=f.home_score!==null&&f.home_score!==undefined;
                 return (
-                  <div key={i} className={'card' + (live ? ' live' : finished ? ' finished' : '')}>
+                  <div key={i} className={'card'+(live?' is-live':'')}>
                     <div className="card-top">
-                      <span className="league-tag">{f.league}</span>
-                      <span className="time">
-                        {live && <span className="live-dot"></span>}
-                        {live ? 'LIVE' : finished ? 'FT' : f.time}
+                      <span className="league-tag">{f.league}{f.country?' · '+f.country:''}</span>
+                      <span className="kick">
+                        {live&&<span className="live-dot"/>}
+                        {live?'LIVE':fin?'FT':f.time}
                       </span>
                     </div>
                     <div className="teams">
-                      <div className="team">
-                        <div className={'team-name' + (f.favourite === 'home' ? ' fav' : '')}>{f.home}</div>
-                      </div>
-                      <div className={'score-box' + (live ? ' live' : '')}>
-                        {hasScore ? (
-                          <>
-                            <div className="score">{f.home_score}-{f.away_score}</div>
-                            <div className={'score-label' + (live ? ' live' : '')}>{live ? 'live' : 'result'}</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="score">{f.predicted_score}</div>
-                            <div className="score-label">predicted</div>
-                          </>
+                      <div className="team"><div className={'team-name'+(f.favourite==='home'?' fav':'')}>{f.home}</div></div>
+                      <div className={'score-box'+(live?' is-live':'')}>
+                        {hasScore?(
+                          <><div className="score">{f.home_score}-{f.away_score}</div><div className={'score-lbl'+(live?' is-live':'')}>{live?'live':'result'}</div></>
+                        ):(
+                          <><div className="score">{f.predicted_score}</div><div className="score-lbl">predicted</div></>
                         )}
                       </div>
-                      <div className="team away">
-                        <div className={'team-name' + (f.favourite === 'away' ? ' fav' : '')}>{f.away}</div>
-                      </div>
+                      <div className="team away"><div className={'team-name'+(f.favourite==='away'?' fav':'')}>{f.away}</div></div>
                     </div>
                     <div className="xg-section">
                       <div className="xg-row">
-                        <span className="xg-label">xG Prediction</span>
+                        <span className="xg-lbl">xG Prediction</span>
                         <div className="xg-vals">
-                          <span className="xg-val home">{f.home_xg} xG</span>
+                          <span className="xg-val h">{f.home_xg} xG</span>
                           <span style={{color:'#2e3550',fontSize:'11px'}}>vs</span>
-                          <span className="xg-val away">{f.away_xg} xG</span>
+                          <span className="xg-val a">{f.away_xg} xG</span>
                         </div>
                       </div>
-                      <div className="xg-bars">
-                        <div className="xg-bar-wrap">
-                          <div className="xg-bar-label">{f.home}</div>
-                          <div className="bar-bg"><div className="bar-fill" style={{width:homePct+'%',background:'#00e5a0'}}></div></div>
-                        </div>
-                        <div className="xg-bar-wrap">
-                          <div className="xg-bar-label" style={{textAlign:'right'}}>{f.away}</div>
-                          <div className="bar-bg"><div className="bar-fill" style={{width:awayPct+'%',background:'#6090d0'}}></div></div>
-                        </div>
+                      <div className="bars">
+                        <div className="bar-wrap"><div className="bar-lbl">{f.home}</div><div className="bar-bg"><div className="bar-fill" style={{width:hp+'%',background:'#00e5a0'}}/></div></div>
+                        <div className="bar-wrap"><div className="bar-lbl" style={{textAlign:'right'}}>{f.away}</div><div className="bar-bg"><div className="bar-fill" style={{width:ap+'%',background:'#6090d0'}}/></div></div>
                       </div>
                     </div>
                   </div>
@@ -373,10 +280,6 @@ export default function Home() {
               })}
             </div>
           </>
-        )}
-
-        {!loading && searched && fixtures.length === 0 && !error && (
-          <div className="no-fixtures">No fixtures found for the selected leagues on this date.</div>
         )}
       </div>
     </>
