@@ -113,6 +113,7 @@ export default function Home() {
       const rows = [];
       let outcomeRight = 0, exactRight = 0, matched = 0;
 
+      const xgItems = [];
       preds.forEach(p => {
         const r = results.find(x => norm(x.home) === norm(p.home) && norm(x.away) === norm(p.away));
         if (!r || r.home_score === null) return;
@@ -125,11 +126,40 @@ export default function Home() {
         rows.push({
           home: p.home, away: p.away, league: p.league,
           predicted: p.predicted_score, actual: `${r.home_score}-${r.away_score}`,
-          outcomeOk, exactOk
+          outcomeOk, exactOk,
+          pxh: p.home_xg, pxa: p.away_xg, fixture_id: r.fixture_id
         });
+        if (r.fixture_id) xgItems.push({ fixture_id: r.fixture_id, home_id: r.home_id, away_id: r.away_id });
       });
 
-      setScores(s => ({ ...s, [d]: { rows, matched, outcomeRight, exactRight, total: preds.length } }));
+      // Pull real match xG for the matched games (coverage varies by league)
+      let xgCount = 0, xgErrSum = 0;
+      if (xgItems.length) {
+        try {
+          const xres = await fetch('/api/analyse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'xg', items: xgItems })
+          });
+          const xdata = await xres.json();
+          const xg = xdata.xg || {};
+          rows.forEach(row => {
+            const a = xg[row.fixture_id];
+            if (a && a.home_xg !== null && a.away_xg !== null) {
+              row.axh = a.home_xg; row.axa = a.away_xg;
+              if (typeof row.pxh === 'number' && typeof row.pxa === 'number') {
+                xgErrSum += Math.abs(row.pxh - a.home_xg) + Math.abs(row.pxa - a.away_xg);
+                xgCount += 2;
+              }
+            }
+          });
+        } catch {}
+      }
+
+      setScores(s => ({ ...s, [d]: {
+        rows, matched, outcomeRight, exactRight, total: preds.length,
+        xgErr: xgCount ? xgErrSum / xgCount : null
+      } }));
     } catch (e) {
       setScores(s => ({ ...s, [d]: { error: e.message } }));
     }
@@ -213,6 +243,7 @@ export default function Home() {
         .acc-res { display:flex; gap:10px; align-items:center; flex-shrink:0; }
         .acc-pred { color:#3a5080; }
         .acc-act { color:#c8d0e0; font-weight:600; }
+        .acc-xg { font-size:10px; color:#40b0c0; white-space:nowrap; }
         .tick { color:#00e5a0; }
         .cross { color:#e05555; }
         .note { font-size:12px; color:#3a4260; line-height:1.6; margin-bottom:16px; }
@@ -335,6 +366,12 @@ export default function Home() {
                         <div className="acc-num" style={{color:'#5a6380'}}>{s.matched}/{s.total}</div>
                         <div className="acc-cap">Matched</div>
                       </div>
+                      {s.xgErr !== null && s.xgErr !== undefined && (
+                        <div className="acc-stat">
+                          <div className="acc-num" style={{color:'#40b0c0'}}>±{s.xgErr.toFixed(2)}</div>
+                          <div className="acc-cap">Avg xG error</div>
+                        </div>
+                      )}
                     </div>
                     {s.rows.length > 0 && (
                       <div className="acc-rows">
@@ -344,6 +381,7 @@ export default function Home() {
                             <span className="acc-res">
                               <span className="acc-pred">{r.predicted}</span>
                               <span className="acc-act">{r.actual}</span>
+                              {r.axh != null && <span className="acc-xg">xG {r.pxh}-{r.pxa} → {r.axh}-{r.axa}</span>}
                               <span className={r.outcomeOk?'tick':'cross'}>{r.outcomeOk?'✓':'✗'}</span>
                             </span>
                           </div>
