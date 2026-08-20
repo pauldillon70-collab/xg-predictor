@@ -162,11 +162,19 @@ async function buildFormMap(teamIds) {
       }
     }
     if (!seq.length) { formMap[teamId] = null; continue; }
-    let s = `${seq.join('')}, scored ${gf}, conceded ${ga}`;
+    const form = {
+      seq: seq.join(''),
+      gf, ga,
+      xgf: xgGames ? +(xgf / xgGames).toFixed(2) : null,
+      xga: xgGames ? +(xga / xgGames).toFixed(2) : null,
+      xgGames,
+    };
+    let s = `${form.seq}, scored ${gf}, conceded ${ga}`;
     if (xgGames) {
-      s += `, xG for ${(xgf / xgGames).toFixed(2)}/game, xG against ${(xga / xgGames).toFixed(2)}/game over ${xgGames} games`;
+      s += `, xG for ${form.xgf}/game, xG against ${form.xga}/game over ${xgGames} games`;
     }
-    formMap[teamId] = s;
+    form.text = s;
+    formMap[teamId] = form;
   }
   return formMap;
 }
@@ -251,8 +259,8 @@ async function runDaily(date) {
   const list = batch.map(f => {
     const fh = formMap[f.home_id];
     const fa = formMap[f.away_id];
-    const h = fh ? `${f.home} [last 5: ${fh}]` : f.home;
-    const a = fa ? `${f.away} [last 5: ${fa}]` : f.away;
+    const h = fh ? `${f.home} [last 5: ${fh.text}]` : f.home;
+    const a = fa ? `${f.away} [last 5: ${fa.text}]` : f.away;
     return `${h} vs ${a} (${f.league})`;
   }).join('\n');
   const data = await anthropic({
@@ -270,8 +278,12 @@ async function runDaily(date) {
     if (!p) p = preds[i] || {};
     const hx = typeof p.home_xg === 'number' ? p.home_xg : 1.2;
     const ax = typeof p.away_xg === 'number' ? p.away_xg : 1.0;
+    const hf = formMap[f.home_id];
+    const af = formMap[f.away_id];
     return {
       ...f,
+      home_form: hf ? { seq: hf.seq, xgf: hf.xgf, xga: hf.xga } : null,
+      away_form: af ? { seq: af.seq, xgf: af.xgf, xga: af.xga } : null,
       home_xg: hx,
       away_xg: ax,
       predicted_score: p.predicted_score || '1-1',

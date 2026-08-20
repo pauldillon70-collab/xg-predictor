@@ -17,6 +17,7 @@ function saveStore(store) {
 }
 
 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const abbr = n => (n || '').slice(0, 3).toUpperCase();
 
 export default function Home() {
   const today = new Date().toISOString().split('T')[0];
@@ -219,6 +220,7 @@ export default function Home() {
         .bar-lbl { font-size: 9px; color: #2e3550; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .bar-bg { background: #1e2540; border-radius: 3px; height: 5px; }
         .bar-fill { border-radius: 3px; height: 5px; }
+        .form-line { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #1a2340; font-size: 10px; color: #3a5080; line-height: 1.6; }
         .skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
         .skeleton { background: #111827; border: 1px solid #1e2540; border-radius: 10px; height: 160px; position: relative; overflow: hidden; }
         .skeleton::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg,transparent 0%,#1e2540 50%,transparent 100%); animation:shimmer 1.5s infinite; }
@@ -317,6 +319,13 @@ export default function Home() {
                           <div className="bar-wrap"><div className="bar-lbl">{f.home}</div><div className="bar-bg"><div className="bar-fill" style={{width:hp+'%',background:'#00e5a0'}}/></div></div>
                           <div className="bar-wrap"><div className="bar-lbl" style={{textAlign:'right'}}>{f.away}</div><div className="bar-bg"><div className="bar-fill" style={{width:ap+'%',background:'#6090d0'}}/></div></div>
                         </div>
+                        {(f.home_form || f.away_form) && (
+                          <div className="form-line">
+                            {f.home_form && <span>{abbr(f.home)}: {f.home_form.seq}{f.home_form.xgf != null ? ` · xG ${f.home_form.xgf} for / ${f.home_form.xga} vs` : ''}</span>}
+                            {f.home_form && f.away_form && <span> — </span>}
+                            {f.away_form && <span>{abbr(f.away)}: {f.away_form.seq}{f.away_form.xgf != null ? ` · xG ${f.away_form.xgf} for / ${f.away_form.xga} vs` : ''}</span>}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
