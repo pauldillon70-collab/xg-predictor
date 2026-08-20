@@ -298,8 +298,7 @@ export default function Home() {
         {tab === 'accuracy' && <>
           <p className="note">
             Each day's predictions are saved automatically when you load today's fixtures. Come back the next day and hit
-            Score to compare them against the real results. Note: the API-Football free plan only serves results within
-            about a day, so score each day promptly — yesterday works, last week won't.
+            Score to compare them against the real results. Results are pulled live from API-Football when you score a day.
           </p>
 
           {!storedDates.length && <div className="empty">No saved predictions yet. Load today's fixtures first, then come back tomorrow.</div>}

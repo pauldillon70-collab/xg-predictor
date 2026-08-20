@@ -104,6 +104,27 @@ async function apiFootball(path) {
   return data.response || [];
 }
 
+// Fetch a team's last-5 form (paid plan: historical fixtures available)
+async function getTeamForm(teamId) {
+  try {
+    const fixtures = await apiFootball(`/fixtures?team=${teamId}&last=5`);
+    let gf = 0, ga = 0;
+    const seq = [];
+    for (const f of fixtures) {
+      const isHome = f.teams.home.id === teamId;
+      const mine = isHome ? f.goals.home : f.goals.away;
+      const theirs = isHome ? f.goals.away : f.goals.home;
+      if (mine === null || theirs === null) continue;
+      gf += mine; ga += theirs;
+      seq.push(mine > theirs ? 'W' : mine < theirs ? 'L' : 'D');
+    }
+    if (!seq.length) return null;
+    return `${seq.join('')}, scored ${gf}, conceded ${ga}`;
+  } catch {
+    return null;
+  }
+}
+
 async function anthropic(payload) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -169,17 +190,31 @@ async function runDaily(date) {
   const batch = ranked.slice(0, 40).map(f => ({
     home: f.teams.home.name,
     away: f.teams.away.name,
+    home_id: f.teams.home.id,
+    away_id: f.teams.away.id,
     league: f.league.name,
     country: f.league.country,
     kickoff: f.fixture.date, // full ISO — client renders local time
   }));
 
+  // Fetch last-5 form for every team in the batch (parallel, best-effort:
+  // a failed lookup just means that team goes in without form)
+  const teamIds = [...new Set(batch.flatMap(f => [f.home_id, f.away_id]))];
+  const formEntries = await Promise.all(teamIds.map(async id => [id, await getTeamForm(id)]));
+  const formMap = Object.fromEntries(formEntries);
+
   // Predictions echo team names so we can match by name, not position
-  const list = batch.map(f => `${f.home} vs ${f.away} (${f.league})`).join('\n');
+  const list = batch.map(f => {
+    const fh = formMap[f.home_id];
+    const fa = formMap[f.away_id];
+    const h = fh ? `${f.home} [last 5: ${fh}]` : f.home;
+    const a = fa ? `${f.away} [last 5: ${fa}]` : f.away;
+    return `${h} vs ${a} (${f.league})`;
+  }).join('\n');
   const data = await anthropic({
     model: 'claude-sonnet-4-5',
     max_tokens: 8192,
-    system: 'You are a football analyst. Given a list of fixtures, predict xG for each. Return ONLY a JSON array, no markdown, no text. One object per fixture. Each object MUST repeat the exact home and away team names from the input. Format: [{"home":"Team A","away":"Team B","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw. Base on team quality, league level, home advantage, current form.',
+    system: 'You are a football analyst. Given a list of fixtures, predict xG for each. Many teams include their real last-5 form in brackets: result sequence, then goals scored and conceded across those matches. Weight this recent form heavily alongside team quality, league level, and home advantage — a strong team in poor form should be marked down, a modest team in hot form marked up. Return ONLY a JSON array, no markdown, no text. One object per fixture. Each object MUST repeat the exact home and away team names from the input (WITHOUT the form brackets). Format: [{"home":"Team A","away":"Team B","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw.',
     messages: [{ role: 'user', content: `Predict xG for all these fixtures:\n${list}\n\nReturn only the JSON array with exactly ${batch.length} entries.` }]
   });
   const preds = extractJsonArray(data);
