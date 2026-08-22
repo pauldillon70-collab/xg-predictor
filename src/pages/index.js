@@ -257,7 +257,7 @@ export default function Home() {
           <div className="logo">xG</div>
           <div>
             <div className="title">Daily xG Fixtures <span style={{color:'#00e5a0',fontSize:'13px',letterSpacing:'2px'}}>LIVE</span></div>
-            <div className="subtitle">Top 20 upcoming fixtures by predicted xG</div>
+            <div className="subtitle">Top 60 fixtures worldwide by predicted xG</div>
           </div>
         </div>
         <div className="tabs">
