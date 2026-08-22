@@ -1,91 +1,8 @@
 // Full pipeline runs server-side so results are cached once per day
 // for everyone, instead of per browser tab.
 
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 300 };
 
-// League priority ladder — lower number = higher priority for the 40
-// prediction slots. All English, Scottish, and European competitions
-// rank above everything else; unknown leagues fall to 999.
-const LEAGUE_PRIORITY = {
-  // European competitions
-  2: 1,    // Champions League
-  3: 2,    // Europa League
-  848: 3,  // Conference League
-  1: 4,    // World Cup
-  4: 5,    // Euros
-
-  // Premier League and English cups
-  39: 10,  // Premier League
-  45: 11,  // FA Cup
-  48: 12,  // League Cup
-
-  // Top European domestic leagues
-  140: 13, // La Liga
-  135: 14, // Serie A
-  78: 15,  // Bundesliga
-  61: 16,  // Ligue 1
-
-  // English and Scottish pyramid
-  40: 20,  // Championship
-  179: 21, // Scottish Premiership
-  41: 22,  // League One
-  42: 23,  // League Two
-  43: 24,  // National League
-  180: 25, // Scottish Championship
-  181: 26, // Scottish League One
-
-  // Strong European leagues
-  88: 30,  // Eredivisie
-  94: 31,  // Primeira Liga
-  144: 32, // Belgian Pro League
-  203: 33, // Turkish Süper Lig
-
-  // European domestic cups
-  143: 34, // Copa del Rey
-  137: 35, // Coppa Italia
-  81: 36,  // DFB Pokal
-  66: 37,  // Coupe de France
-
-  // European second divisions
-  62: 40,  // Ligue 2
-  79: 41,  // Bundesliga 2
-  89: 42,  // Eerste Divisie
-
-  // Rest of Europe
-  207: 50, // Swiss Super League
-  218: 51, // Austrian Bundesliga
-  197: 52, // Greek Super League
-  119: 53, // Danish Superliga
-  103: 54, // Eliteserien
-  113: 55, // Allsvenskan
-  244: 56, // Finnish Veikkausliiga
-  345: 57, // Czech First League
-  106: 58, // Polish Ekstraklasa
-  283: 59, // Romanian Liga 1
-  210: 60, // Croatian HNL
-  441: 61, // Slovenian PrvaLiga
-  357: 62, // Irish Premier League
-
-  // Major non-European
-  253: 100, // MLS
-  262: 101, // Liga MX
-  71: 102,  // Brazilian Série A
-  128: 103, // Argentine Primera
-  307: 104, // Saudi Pro League
-  98: 105,  // J1 League
-  13: 106,  // Copa Libertadores
-  11: 107,  // Copa Sudamericana
-
-  // Other covered leagues
-  384: 200, // Israeli Premier League
-  169: 201, // Chinese Super League
-  142: 202, // Malaysian Super League
-  909: 203, // MLS Next Pro
-};
-
-function leaguePriority(id) {
-  return LEAGUE_PRIORITY[id] ?? 999;
-}
 
 const NOT_STARTED_EXCLUDE = ["FT", "AET", "PEN", "AWD", "WO", "1H", "2H", "HT", "ET", "P", "LIVE", "INT"];
 const FINISHED = ["FT", "AET", "PEN"];
@@ -97,13 +14,28 @@ const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// Space request starts ~240ms apart (~250/min) so we never overrun
+// the plan's per-minute rate limit, regardless of concurrency.
+let __gate = Promise.resolve();
+let __lastStart = 0;
+const MIN_SPACING_MS = 220;
+function rateGate() {
+  __gate = __gate.then(async () => {
+    const wait = Math.max(0, __lastStart + MIN_SPACING_MS - Date.now());
+    if (wait) await new Promise(r => setTimeout(r, wait));
+    __lastStart = Date.now();
+  });
+  return __gate;
+}
+
 async function apiFootball(path, retries = 1) {
+  await rateGate();
   const res = await fetch(`https://v3.football.api-sports.io${path}`, {
     headers: { 'x-apisports-key': process.env.API_FOOTBALL_KEY }
   });
   if (!res.ok) {
     if (retries > 0 && (res.status === 429 || res.status >= 500)) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 5000));
       return apiFootball(path, retries - 1);
     }
     throw new Error(`API-Football error ${res.status}`);
@@ -127,7 +59,11 @@ async function pooled(items, worker, limit = 12) {
 }
 
 // Extract both teams' real xG from one fixture's statistics
+globalThis.__statsCache = globalThis.__statsCache || {};
+
 async function getFixtureXgMap(fixtureId) {
+  const cached = globalThis.__statsCache[fixtureId];
+  if (cached) return cached;
   try {
     const stats = await apiFootball(`/fixtures/statistics?fixture=${fixtureId}`);
     const map = {};
@@ -136,6 +72,8 @@ async function getFixtureXgMap(fixtureId) {
       const v = stat ? parseFloat(stat.value) : NaN;
       if (entry.team) map[entry.team.id] = Number.isFinite(v) ? v : null;
     }
+    // Finished-match stats never change: cache non-empty results forever
+    if (Object.keys(map).length) globalThis.__statsCache[fixtureId] = map;
     return map;
   } catch {
     return {};
@@ -154,9 +92,10 @@ async function buildFormMap(teamIds) {
 
   // One statistics call per unique finished fixture (deduped across teams)
   const statIds = [...new Set(
-    Object.values(teamFixtures).flat()
-      .filter(f => FINISHED.includes(f.fixture.status.short))
-      .map(f => f.fixture.id)
+    Object.values(teamFixtures).flatMap(arr =>
+      arr.filter(f => FINISHED.includes(f.fixture.status.short))
+        .map(f => f.fixture.id)
+    )
   )];
   const statsEntries = await pooled(statIds, async id => [id, await getFixtureXgMap(id)]);
   const statsMap = Object.fromEntries(statsEntries);
@@ -243,6 +182,27 @@ function extractJsonArray(data) {
   }
 }
 
+// Neutral first pass: from the full worldwide list, pick the 60 fixtures
+// most worth evaluating — no hardcoded league priority, no country bias.
+async function pickFixtures(upcoming) {
+  if (upcoming.length <= 60) return upcoming;
+  const lines = upcoming.map((f, i) =>
+    `${i}| ${f.teams.home.name} vs ${f.teams.away.name} (${f.league.name}, ${f.league.country})`
+  ).join('\n');
+  try {
+    const data = await anthropic({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1500,
+      system: 'You are a football analyst. From the numbered fixture list, choose the 60 fixtures most likely to be highest quality and highest scoring, judged on club stature, league standard, and likely goals. Judge every country and league on equal terms — do NOT favour any region. Return ONLY a JSON array of the chosen line numbers, e.g. [3,17,25]. No text, no markdown.',
+      messages: [{ role: 'user', content: `Fixtures today:\n${lines}\n\nReturn only the JSON array of 60 line numbers.` }]
+    });
+    const idx = extractJsonArray(data).filter(n => Number.isInteger(n) && n >= 0 && n < upcoming.length);
+    const picked = [...new Set(idx)].slice(0, 60).map(i => upcoming[i]);
+    if (picked.length >= 20) return picked;
+  } catch {}
+  return upcoming.slice(0, 60);
+}
+
 async function runDaily(date) {
   const cached = globalThis.__xgCache[date];
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
@@ -256,12 +216,9 @@ async function runDaily(date) {
   if (!upcoming.length) return { fixtures: [], cached: false };
 
   // Rank by league priority tier before slicing, kickoff order within tier
-  const ranked = upcoming
-    .map((f, idx) => ({ f, idx, pri: leaguePriority(f.league.id) }))
-    .sort((a, b) => a.pri - b.pri || a.idx - b.idx)
-    .map(x => x.f);
+  const picked = await pickFixtures(upcoming);
 
-  const batch = ranked.slice(0, 40).map(f => ({
+  const batch = picked.map(f => ({
     home: f.teams.home.name,
     away: f.teams.away.name,
     home_id: f.teams.home.id,
@@ -285,7 +242,7 @@ async function runDaily(date) {
   }).join('\n');
   const data = await anthropic({
     model: 'claude-sonnet-4-5',
-    max_tokens: 8192,
+    max_tokens: 16000,
     system: 'You are a football analyst. Given a list of fixtures, predict xG for each. Many teams include real last-5 form in brackets: result sequence, goals scored and conceded, and where available their REAL xG for and against per game from actual match data. The xG for/against figures are the strongest signal — a team creating 1.8 xG/game is genuinely dangerous regardless of results, and a team conceding 2.0 xG/game is genuinely leaky even if scorelines flattered them. Weight xG form first, then results form, then team quality, league level, and home advantage. Return ONLY a JSON array, no markdown, no text. One object per fixture. Each object MUST repeat the exact home and away team names from the input (WITHOUT the form brackets). Format: [{"home":"Team A","away":"Team B","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw.',
     messages: [{ role: 'user', content: `Predict xG for all these fixtures:\n${list}\n\nReturn only the JSON array with exactly ${batch.length} entries.` }]
   });
@@ -313,10 +270,9 @@ async function runDaily(date) {
   });
 
   combined.sort((a, b) => b.total_xg - a.total_xg);
-  const top20 = combined.slice(0, 20);
 
-  globalThis.__xgCache[date] = { at: Date.now(), data: top20 };
-  return { fixtures: top20, cached: false };
+  globalThis.__xgCache[date] = { at: Date.now(), data: combined };
+  return { fixtures: combined, cached: false };
 }
 
 // Fetch real match xG from fixture statistics for a set of finished games.
