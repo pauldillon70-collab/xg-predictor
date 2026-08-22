@@ -97,13 +97,33 @@ const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-async function apiFootball(path) {
+async function apiFootball(path, retries = 1) {
   const res = await fetch(`https://v3.football.api-sports.io${path}`, {
     headers: { 'x-apisports-key': process.env.API_FOOTBALL_KEY }
   });
-  if (!res.ok) throw new Error(`API-Football error ${res.status}`);
+  if (!res.ok) {
+    if (retries > 0 && (res.status === 429 || res.status >= 500)) {
+      await new Promise(r => setTimeout(r, 1500));
+      return apiFootball(path, retries - 1);
+    }
+    throw new Error(`API-Football error ${res.status}`);
+  }
   const data = await res.json();
   return data.response || [];
+}
+
+// Run async work over a list with bounded concurrency, so we never
+// blast hundreds of simultaneous requests at the API's rate limits.
+async function pooled(items, worker, limit = 12) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await worker(items[idx]);
+    }
+  }));
+  return results;
 }
 
 // Extract both teams' real xG from one fixture's statistics
@@ -126,10 +146,10 @@ async function getFixtureXgMap(fixtureId) {
 // per game where the league provides it. Everything is best-effort:
 // a failed lookup degrades to goals-only form, or no form at all.
 async function buildFormMap(teamIds) {
-  const lastFixtures = await Promise.all(teamIds.map(async id => {
+  const lastFixtures = await pooled(teamIds, async id => {
     try { return [id, await apiFootball(`/fixtures?team=${id}&last=5`)]; }
     catch { return [id, []]; }
-  }));
+  });
   const teamFixtures = Object.fromEntries(lastFixtures);
 
   // One statistics call per unique finished fixture (deduped across teams)
@@ -138,7 +158,7 @@ async function buildFormMap(teamIds) {
       .filter(f => FINISHED.includes(f.fixture.status.short))
       .map(f => f.fixture.id)
   )];
-  const statsEntries = await Promise.all(statIds.map(async id => [id, await getFixtureXgMap(id)]));
+  const statsEntries = await pooled(statIds, async id => [id, await getFixtureXgMap(id)]);
   const statsMap = Object.fromEntries(statsEntries);
 
   const formMap = {};
