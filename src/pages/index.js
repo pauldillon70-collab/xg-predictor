@@ -18,6 +18,7 @@ function saveStore(store) {
 
 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const abbr = n => (n || '').slice(0, 3).toUpperCase();
+const fmt = n => (typeof n === 'number' ? String(Math.round(n * 100) / 100) : '');
 
 export default function Home() {
   const today = new Date().toISOString().split('T')[0];
@@ -29,6 +30,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [searched, setSearched] = useState('');
   const [dataSource, setDataSource] = useState('');
+  const [dropped, setDropped] = useState(0);
   const [store, setStore] = useState({});
   const [scoring, setScoring] = useState('');
   const [scores, setScores] = useState({});
@@ -46,51 +48,26 @@ export default function Home() {
     setError(''); setSearched(date); setFixtures([]); setLoading(true);
 
     try {
-      if (date === today) {
-        setStage('Fetching and predicting...');
-        const res = await fetch('/api/analyse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'daily', date })
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        const fx = data.fixtures || [];
-        if (!fx.length) {
-          setError('No upcoming fixtures left today.');
-        } else {
-          setDataSource(data.cached ? 'cached' : 'live');
-          setFixtures(fx);
-          // Save today's predictions for accuracy tracking
+      setStage('Fetching fixtures and calculating...');
+      const res = await fetch('/api/analyse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'daily', date })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const fx = data.fixtures || [];
+      setDropped(data.dropped || 0);
+      if (!fx.length) {
+        setError(date === today ? 'No upcoming fixtures left today.' : 'No fixtures found for this date.');
+      } else {
+        setDataSource(data.cached ? 'cached' : 'live');
+        setFixtures(fx);
+        // Save today's predictions for accuracy tracking
+        if (date === today) {
           const next = { ...loadStore(), [date]: { savedAt: Date.now(), fixtures: fx } };
           saveStore(next);
           setStore(next);
-        }
-      } else {
-        setStage('Searching...');
-        const res = await fetch('/api/analyse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'search',
-            payload: {
-              model: 'claude-sonnet-4-5',
-              max_tokens: 2048,
-              system: 'You are a football analyst. Find the top 20 most high-profile football fixtures on the given date worldwide. Return ONLY a JSON array, no markdown. Format: [{"home":"Team","away":"Team","league":"League","time":"HH:MM UTC","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. Sort by combined xG descending.',
-              messages: [{ role: 'user', content: `Find top 20 football fixtures for ${date} worldwide sorted by predicted xG. Return only the JSON array.` }]
-            }
-          })
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(typeof data.error === 'string' ? data.error : data.error.message);
-        const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-        const m = text.match(/\[[\s\S]*\]/);
-        const results = m ? JSON.parse(m[0]) : [];
-        if (!results.length) { setError('No fixtures found for this date.'); }
-        else {
-          results.sort((a, b) => (b.home_xg + b.away_xg) - (a.home_xg + a.away_xg));
-          setDataSource('claude');
-          setFixtures(results);
         }
       }
     } catch (e) { setError('Error: ' + e.message); }
@@ -257,7 +234,7 @@ export default function Home() {
           <div className="logo">xG</div>
           <div>
             <div className="title">Daily xG Fixtures <span style={{color:'#00e5a0',fontSize:'13px',letterSpacing:'2px'}}>LIVE</span></div>
-            <div className="subtitle">Top 60 fixtures worldwide by predicted xG</div>
+            <div className="subtitle">Top 60 fixtures worldwide · home form at home, away form away</div>
           </div>
         </div>
         <div className="tabs">
@@ -285,7 +262,7 @@ export default function Home() {
                 {dataSource==='live' && <span className="badge live">Live data</span>}
                 {dataSource==='cached' && <span className="badge cached">Cached</span>}
                 {dataSource==='claude' && <span className="badge ai">AI predictions</span>}
-                <span style={{marginLeft:'auto',fontSize:'10px',color:'#2e3550'}}>{fixtures.length} fixtures · sorted by xG</span>
+                <span style={{marginLeft:'auto',fontSize:'10px',color:'#2e3550'}}>{fixtures.length} fixtures · sorted by expected total goals{dropped ? ` · ${dropped} left out (not enough home/away history)` : ''}</span>
               </div>
               <div className="grid">
                 {fixtures.map((f,i)=>{
@@ -308,24 +285,29 @@ export default function Home() {
                       </div>
                       <div className="xg-section">
                         <div className="xg-row">
-                          <span className="xg-lbl">xG Prediction</span>
+                          <span className="xg-lbl">Expected goals · total {fmt(f.total_xg)}</span>
                           <div className="xg-vals">
-                            <span className="xg-val h">{f.home_xg} xG</span>
+                            <span className="xg-val h">{fmt(f.home_xg)}</span>
                             <span style={{color:'#2e3550',fontSize:'11px'}}>vs</span>
-                            <span className="xg-val a">{f.away_xg} xG</span>
+                            <span className="xg-val a">{fmt(f.away_xg)}</span>
                           </div>
                         </div>
                         <div className="bars">
                           <div className="bar-wrap"><div className="bar-lbl">{f.home}</div><div className="bar-bg"><div className="bar-fill" style={{width:hp+'%',background:'#00e5a0'}}/></div></div>
                           <div className="bar-wrap"><div className="bar-lbl" style={{textAlign:'right'}}>{f.away}</div><div className="bar-bg"><div className="bar-fill" style={{width:ap+'%',background:'#6090d0'}}/></div></div>
                         </div>
-                        {(f.home_form || f.away_form) && (
-                          <div className="form-line">
-                            {f.home_form && <span>{abbr(f.home)}: {f.home_form.seq}{f.home_form.xgf != null ? ` · xG ${f.home_form.xgf} for / ${f.home_form.xga} vs` : ''}</span>}
-                            {f.home_form && f.away_form && <span> — </span>}
-                            {f.away_form && <span>{abbr(f.away)}: {f.away_form.seq}{f.away_form.xgf != null ? ` · xG ${f.away_form.xgf} for / ${f.away_form.xga} vs` : ''}</span>}
-                          </div>
-                        )}
+                        {f.workings && (() => {
+                          const h = f.workings.home, a = f.workings.away;
+                          const hn = abbr(f.home), an = abbr(f.away);
+                          return (
+                            <div className="form-line">
+                              <div>{hn} last {h.games} home: {fmt(h.scored)} scored + {fmt(h.conceded)} conceded = {fmt(h.total)}</div>
+                              <div>{an} last {a.games} away: {fmt(a.scored)} scored + {fmt(a.conceded)} conceded = {fmt(a.total)}</div>
+                              <div>Total: ({fmt(h.total)} + {fmt(a.total)}) ÷ 2 = {fmt(f.total_xg)}</div>
+                              <div>{hn}: ({fmt(h.scored)} + {fmt(a.conceded)}) ÷ 2 = {fmt(f.home_xg)} · {an}: ({fmt(a.scored)} + {fmt(h.conceded)}) ÷ 2 = {fmt(f.away_xg)}</div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
