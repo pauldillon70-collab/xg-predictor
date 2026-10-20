@@ -58,84 +58,55 @@ async function pooled(items, worker, limit = 12) {
   return results;
 }
 
-// Extract both teams' real xG from one fixture's statistics
-globalThis.__statsCache = globalThis.__statsCache || {};
+// Paul's formula. Each side is judged only on games played at the same
+// venue as this fixture: the home side's last 10 home games and the away
+// side's last 10 away games, using real goals. Only finished competitive
+// matches played before kickoff count; club friendlies are left out
+// because their "home" side is often nominal.
+const VENUE_GAMES = 10;
+const HISTORY_FETCH = 50;
+const round2 = n => Math.round(n * 100) / 100;
 
-async function getFixtureXgMap(fixtureId) {
-  const cached = globalThis.__statsCache[fixtureId];
-  if (cached) return cached;
-  try {
-    const stats = await apiFootball(`/fixtures/statistics?fixture=${fixtureId}`);
-    const map = {};
-    for (const entry of stats) {
-      const stat = (entry.statistics || []).find(s => (s.type || '').toLowerCase().replace(/[^a-z]/g, '') === 'expectedgoals');
-      const v = stat ? parseFloat(stat.value) : NaN;
-      if (entry.team) map[entry.team.id] = Number.isFinite(v) ? v : null;
-    }
-    // Finished-match stats never change: cache non-empty results forever
-    if (Object.keys(map).length) globalThis.__statsCache[fixtureId] = map;
-    return map;
-  } catch {
-    return {};
+async function venueAverages(teamId, venue, beforeIso) {
+  let history = [];
+  try { history = await apiFootball(`/fixtures?team=${teamId}&last=${HISTORY_FETCH}`); }
+  catch { return null; }
+  const before = beforeIso ? new Date(beforeIso).getTime() : Infinity;
+  const games = history
+    .filter(f => FINISHED.includes(f.fixture.status.short))
+    .filter(f => !/friendlies/i.test((f.league && f.league.name) || ''))
+    .filter(f => new Date(f.fixture.date).getTime() < before)
+    .filter(f => venue === 'home' ? f.teams.home.id === teamId : f.teams.away.id === teamId)
+    .filter(f => f.goals.home !== null && f.goals.away !== null)
+    .sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date))
+    .slice(0, VENUE_GAMES);
+  if (!games.length) return null;
+  let scored = 0, conceded = 0;
+  for (const f of games) {
+    scored += venue === 'home' ? f.goals.home : f.goals.away;
+    conceded += venue === 'home' ? f.goals.away : f.goals.home;
   }
+  // Averages are rounded first so every figure on the card can be
+  // checked by hand from the ones shown above it.
+  const avgScored = round2(scored / games.length);
+  const avgConceded = round2(conceded / games.length);
+  return { games: games.length, scored: avgScored, conceded: avgConceded, total: round2(avgScored + avgConceded) };
 }
 
-// Build last-5 form for a set of teams, including real xG for/against
-// per game where the league provides it. Everything is best-effort:
-// a failed lookup degrades to goals-only form, or no form at all.
-async function buildFormMap(teamIds) {
-  const lastFixtures = await pooled(teamIds, async id => {
-    try { return [id, await apiFootball(`/fixtures?team=${id}&last=5`)]; }
-    catch { return [id, []]; }
-  });
-  const teamFixtures = Object.fromEntries(lastFixtures);
-
-  // One statistics call per unique finished fixture (deduped across teams)
-  const statIds = [...new Set(
-    Object.values(teamFixtures).flatMap(arr =>
-      arr.filter(f => FINISHED.includes(f.fixture.status.short))
-        .map(f => f.fixture.id)
-    )
-  )];
-  const statsEntries = await pooled(statIds, async id => [id, await getFixtureXgMap(id)]);
-  const statsMap = Object.fromEntries(statsEntries);
-
-  const formMap = {};
-  for (const teamId of teamIds) {
-    const fixtures = teamFixtures[teamId] || [];
-    let gf = 0, ga = 0, xgf = 0, xga = 0, xgGames = 0;
-    const seq = [];
-    for (const f of fixtures) {
-      const isHome = f.teams.home.id === teamId;
-      const mine = isHome ? f.goals.home : f.goals.away;
-      const theirs = isHome ? f.goals.away : f.goals.home;
-      if (mine === null || theirs === null) continue;
-      gf += mine; ga += theirs;
-      seq.push(mine > theirs ? 'W' : mine < theirs ? 'L' : 'D');
-      const sm = statsMap[f.fixture.id];
-      if (sm) {
-        const oppId = isHome ? f.teams.away.id : f.teams.home.id;
-        if (sm[teamId] != null && sm[oppId] != null) {
-          xgf += sm[teamId]; xga += sm[oppId]; xgGames++;
-        }
-      }
-    }
-    if (!seq.length) { formMap[teamId] = null; continue; }
-    const form = {
-      seq: seq.join(''),
-      gf, ga,
-      xgf: xgGames ? +(xgf / xgGames).toFixed(2) : null,
-      xga: xgGames ? +(xga / xgGames).toFixed(2) : null,
-      xgGames,
-    };
-    let s = `${form.seq}, scored ${gf}, conceded ${ga}`;
-    if (xgGames) {
-      s += `, xG for ${form.xgf}/game, xG against ${form.xga}/game over ${xgGames} games`;
-    }
-    form.text = s;
-    formMap[teamId] = form;
-  }
-  return formMap;
+// home: the home side's home averages; away: the away side's away averages
+function applyFormula(home, away) {
+  const total = round2((home.total + away.total) / 2);
+  const homeGoals = round2((home.scored + away.conceded) / 2);
+  const awayGoals = round2((away.scored + home.conceded) / 2);
+  const hs = Math.round(homeGoals);
+  const as = Math.round(awayGoals);
+  return {
+    home_xg: homeGoals,
+    away_xg: awayGoals,
+    total_xg: total,
+    predicted_score: `${hs}-${as}`,
+    favourite: hs > as ? 'home' : as > hs ? 'away' : 'draw',
+  };
 }
 
 async function anthropic(payload) {
@@ -203,76 +174,57 @@ async function pickFixtures(upcoming) {
   return upcoming.slice(0, 60);
 }
 
+const CANCELLED = ["PST", "CANC", "ABD", "AWD", "WO", "SUSP"];
+
 async function runDaily(date) {
   const cached = globalThis.__xgCache[date];
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    return { fixtures: cached.data, cached: true };
+    return { fixtures: cached.data, dropped: cached.dropped || 0, cached: true };
   }
 
   const all = await apiFootball(`/fixtures?date=${date}`);
-  if (!all.length) return { fixtures: [], cached: false };
+  if (!all.length) return { fixtures: [], dropped: 0, cached: false };
 
-  const upcoming = all.filter(f => !NOT_STARTED_EXCLUDE.includes(f.fixture.status.short));
-  if (!upcoming.length) return { fixtures: [], cached: false };
+  // Today: only games that haven't kicked off. Other dates: every game
+  // that wasn't called off.
+  const today = new Date().toISOString().split('T')[0];
+  const pool = date === today
+    ? all.filter(f => !NOT_STARTED_EXCLUDE.includes(f.fixture.status.short))
+    : all.filter(f => !CANCELLED.includes(f.fixture.status.short));
+  if (!pool.length) return { fixtures: [], dropped: 0, cached: false };
 
-  // Rank by league priority tier before slicing, kickoff order within tier
-  const picked = await pickFixtures(upcoming);
+  // Claude only chooses which 60 fixtures get calculated
+  const picked = await pickFixtures(pool);
 
-  const batch = picked.map(f => ({
-    home: f.teams.home.name,
-    away: f.teams.away.name,
-    home_id: f.teams.home.id,
-    away_id: f.teams.away.id,
-    league: f.league.name,
-    country: f.league.country,
-    kickoff: f.fixture.date, // full ISO — client renders local time
-  }));
+  // Two lookups per fixture: home side at home, away side away
+  const tasks = picked.flatMap(f => [
+    { key: `${f.fixture.id}:home`, teamId: f.teams.home.id, venue: 'home', before: f.fixture.date },
+    { key: `${f.fixture.id}:away`, teamId: f.teams.away.id, venue: 'away', before: f.fixture.date },
+  ]);
+  const results = await pooled(tasks, async t => [t.key, await venueAverages(t.teamId, t.venue, t.before)]);
+  const avg = Object.fromEntries(results);
 
-  // Fetch last-5 form (with real xG where available) for every team in the batch
-  const teamIds = [...new Set(batch.flatMap(f => [f.home_id, f.away_id]))];
-  const formMap = await buildFormMap(teamIds);
-
-  // Predictions echo team names so we can match by name, not position
-  const list = batch.map(f => {
-    const fh = formMap[f.home_id];
-    const fa = formMap[f.away_id];
-    const h = fh ? `${f.home} [last 5: ${fh.text}]` : f.home;
-    const a = fa ? `${f.away} [last 5: ${fa.text}]` : f.away;
-    return `${h} vs ${a} (${f.league})`;
-  }).join('\n');
-  const data = await anthropic({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 16000,
-    system: 'You are a football analyst. Given a list of fixtures, predict xG for each. Many teams include real last-5 form in brackets: result sequence, goals scored and conceded, and where available their REAL xG for and against per game from actual match data. The xG for/against figures are the strongest signal — a team creating 1.8 xG/game is genuinely dangerous regardless of results, and a team conceding 2.0 xG/game is genuinely leaky even if scorelines flattered them. Weight xG form first, then results form, then team quality, league level, and home advantage. Return ONLY a JSON array, no markdown, no text. One object per fixture. Each object MUST repeat the exact home and away team names from the input (WITHOUT the form brackets). Format: [{"home":"Team A","away":"Team B","home_xg":1.5,"away_xg":1.1,"predicted_score":"2-1","favourite":"home"}]. favourite is home/away/draw.',
-    messages: [{ role: 'user', content: `Predict xG for all these fixtures:\n${list}\n\nReturn only the JSON array with exactly ${batch.length} entries.` }]
-  });
-  const preds = extractJsonArray(data);
-
-  // Match predictions to fixtures by team names, fallback to index
-  const combined = batch.map((f, i) => {
-    let p = preds.find(pr => norm(pr.home) === norm(f.home) && norm(pr.away) === norm(f.away));
-    if (!p) p = preds.find(pr => norm(pr.home).includes(norm(f.home).slice(0, 8)) || norm(f.home).includes(norm(pr.home).slice(0, 8)));
-    if (!p) p = preds[i] || {};
-    const hx = typeof p.home_xg === 'number' ? p.home_xg : 1.2;
-    const ax = typeof p.away_xg === 'number' ? p.away_xg : 1.0;
-    const hf = formMap[f.home_id];
-    const af = formMap[f.away_id];
-    return {
-      ...f,
-      home_form: hf ? { seq: hf.seq, xgf: hf.xgf, xga: hf.xga } : null,
-      away_form: af ? { seq: af.seq, xgf: af.xgf, xga: af.xga } : null,
-      home_xg: hx,
-      away_xg: ax,
-      predicted_score: p.predicted_score || '1-1',
-      favourite: p.favourite || 'draw',
-      total_xg: hx + ax,
-    };
-  });
+  const combined = [];
+  let dropped = 0;
+  for (const f of picked) {
+    const h = avg[`${f.fixture.id}:home`];
+    const a = avg[`${f.fixture.id}:away`];
+    if (!h || !a) { dropped++; continue; }
+    combined.push({
+      home: f.teams.home.name,
+      away: f.teams.away.name,
+      league: f.league.name,
+      country: f.league.country,
+      kickoff: f.fixture.date, // full ISO — client renders local time
+      ...applyFormula(h, a),
+      workings: { home: h, away: a },
+    });
+  }
 
   combined.sort((a, b) => b.total_xg - a.total_xg);
 
-  globalThis.__xgCache[date] = { at: Date.now(), data: combined };
-  return { fixtures: combined, cached: false };
+  globalThis.__xgCache[date] = { at: Date.now(), data: combined, dropped };
+  return { fixtures: combined, dropped, cached: false };
 }
 
 // Fetch real match xG from fixture statistics for a set of finished games.
